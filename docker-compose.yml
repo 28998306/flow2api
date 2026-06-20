@@ -67,7 +67,11 @@ services:
     ports:
       - "8000:8000"
 
+  # 出图/出视频 Worker 需要浏览器(reCAPTCHA)。默认在 Windows 宿主机原生运行
+  # (见 run_workers.ps1),不随 `docker compose up` 启动。
+  # 若要用 Docker 跑(需能拉取 Playwright 镜像):docker compose --profile docker-workers up -d
   worker_image:
+    profiles: ["docker-workers"]
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
@@ -77,12 +81,12 @@ services:
       - backend
       - redis
     volumes:
-      - ./backend:/app
       - flow_profiles:/data/flow_profiles
     command: >
       celery -A app.workers.celery_app worker -Q image -n image@%h --concurrency=2 -l info
 
   worker_video:
+    profiles: ["docker-workers"]
     build:
       context: ./backend
       dockerfile: Dockerfile.worker
@@ -92,7 +96,6 @@ services:
       - backend
       - redis
     volumes:
-      - ./backend:/app
       - flow_profiles:/data/flow_profiles
     command: >
       celery -A app.workers.celery_app worker -Q video -n video@%h --concurrency=2 -l info

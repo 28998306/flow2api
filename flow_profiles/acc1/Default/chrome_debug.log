@@ -1,0 +1,5 @@
+[0620/150943.615:ERROR:network_change_notifier_win.cc(188)] WSALookupServiceBegin failed with: 10108
+[0620/150946.792:INFO:CONSOLE(24)] "[object Object]", source: https://labs.google/fx/tools/flow (24)
+[0620/150949.871:INFO:CONSOLE(1)] "[zustand devtools middleware] Please install/enable Redux devtools extension", source: https://labs.google/fx/_next/static/chunks/pages/_app-46150f9fee7934b2.js (1)
+[0620/150949.988:INFO:CONSOLE(1)] "Swiper Loop Warning: The number of slides is not enough for loop mode, it will be disabled or not function properly. You need to add more slides (or make duplicates) or lower the values of slidesPerView and slidesPerGroup parameters", source: https://labs.google/fx/_next/static/chunks/508-43b456a1dc9a860d.js (1)
+[0620/150954.997:INFO:CONSOLE(0)] "[GroupMarkerNotSet(crbug.com/242999)!:A0202F006C5D0000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader flag to opt in to lower security guarantees for trusted content.", source: https://labs.google/fx/tools/flow (0)
