@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  ClipboardList,
   Film,
   History,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Settings,
@@ -23,7 +25,9 @@ const navItems = [
 
 const adminItems = [
   { href: "/admin", label: "数据概览", icon: LayoutDashboard },
+  { href: "/admin/logs", label: "任务日志", icon: ClipboardList },
   { href: "/admin/accounts", label: "账号池", icon: Film },
+  { href: "/admin/api-keys", label: "下游 Key", icon: KeyRound },
   { href: "/admin/users", label: "用户与额度", icon: Settings },
 ];
 

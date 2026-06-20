@@ -24,3 +24,14 @@ class AccountStatus(str, enum.Enum):
     disabled = "disabled"
     cooldown = "cooldown"
     invalid = "invalid"
+
+
+class AccountType(str, enum.Enum):
+    normal = "normal"
+    pro = "pro"
+    ula = "ula"
+
+
+class ApiKeyStatus(str, enum.Enum):
+    active = "active"
+    disabled = "disabled"

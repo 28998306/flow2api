@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import AccountStatus
+from app.models.enums import AccountStatus, AccountType
 
 
 class FlowAccountCreate(BaseModel):
@@ -14,6 +14,9 @@ class FlowAccountCreate(BaseModel):
     email: str | None = None
     session_id: str | None = None
     proxy: str | None = None  # 留空则用全局 FLOW_PROXY
+    account_type: AccountType = AccountType.normal
+    cookies_expires_at: datetime | None = None
+    auto_refresh_minutes: int = Field(default=50, ge=5, le=1440)
     weight: int = 1
     max_concurrency: int = 2
 
@@ -27,6 +30,9 @@ class FlowAccountUpdate(BaseModel):
     project_id: str | None = None
     session_id: str | None = None
     proxy: str | None = None
+    account_type: AccountType | None = None
+    cookies_expires_at: datetime | None = None
+    auto_refresh_minutes: int | None = Field(default=None, ge=5, le=1440)
     status: AccountStatus | None = None
     weight: int | None = None
     max_concurrency: int | None = None
@@ -41,6 +47,7 @@ class FlowAccountOut(BaseModel):
     chrome_profile: str
     project_id: str | None
     proxy: str | None
+    account_type: AccountType
     paygate_tier: str | None
     remaining_credits: int | None
     status: AccountStatus
@@ -51,6 +58,10 @@ class FlowAccountOut(BaseModel):
     last_error: str | None
     last_used_at: datetime | None
     last_bearer_refresh: datetime | None
+    bearer_expires_at: datetime | None = None
+    cookies_expires_at: datetime | None = None
+    next_refresh_at: datetime | None = None
+    auto_refresh_minutes: int = 50
     has_bearer: bool = False
     has_session_token: bool = False
     has_google_cookies: bool = False
@@ -63,3 +74,25 @@ class FlowAccountOut(BaseModel):
         data.has_session_token = bool(getattr(a, "session_token", None))
         data.has_google_cookies = bool(getattr(a, "google_cookies", None))
         return data
+
+
+class FlowAccountImportOut(BaseModel):
+    created: int
+    skipped: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class FlowAccountBatchImport(BaseModel):
+    accounts: list[FlowAccountCreate] = Field(min_length=1, max_length=200)
+
+
+class FlowAccountBatchDelete(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+
+
+class FlowAccountBatchUpdate(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=500)
+    status: AccountStatus | None = None
+    account_type: AccountType | None = None
+    proxy: str | None = None
+    max_concurrency: int | None = Field(default=None, ge=1, le=20)

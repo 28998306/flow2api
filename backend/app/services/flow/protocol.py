@@ -66,6 +66,7 @@ IMAGE_MODEL_MAP = {
     "pro": "GEM_PIX_2",
     "gemini_pro": "GEM_PIX_2",
     "imagen": "IMAGEN_3_5",
+    "imagen_4k": "IMAGEN_3_5",
 }
 DEFAULT_IMAGE_MODEL = "nano_banana"
 

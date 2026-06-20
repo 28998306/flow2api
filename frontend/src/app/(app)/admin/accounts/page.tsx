@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, Plus, Power, Trash2 } from "lucide-react";
+import { CheckCircle2, Plus, Power, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
@@ -19,6 +19,9 @@ const STATUS_STYLE: Record<string, string> = {
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<FlowAccount[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [importText, setImportText] = useState("");
   const [form, setForm] = useState({
     label: "",
     email: "",
@@ -26,6 +29,9 @@ export default function AccountsPage() {
     session_token: "",
     google_cookies: "",
     proxy: "",
+    account_type: "normal",
+    cookies_expires_at: "",
+    auto_refresh_minutes: 50,
     weight: 1,
     max_concurrency: 2,
   });
@@ -42,14 +48,70 @@ export default function AccountsPage() {
       return;
     }
     try {
-      await api("/admin/accounts", { method: "POST", body: JSON.stringify(form) });
-      setForm({ label: "", email: "", project_id: "", session_token: "", google_cookies: "", proxy: "", weight: 1, max_concurrency: 2 });
+      const payload = {
+        ...form,
+        cookies_expires_at: form.cookies_expires_at || null,
+      };
+      await api("/admin/accounts", { method: "POST", body: JSON.stringify(payload) });
+      setForm({
+        label: "",
+        email: "",
+        project_id: "",
+        session_token: "",
+        google_cookies: "",
+        proxy: "",
+        account_type: "normal",
+        cookies_expires_at: "",
+        auto_refresh_minutes: 50,
+        weight: 1,
+        max_concurrency: 2,
+      });
       setShowForm(false);
       load();
       toast.success("账号已新增");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "新增失败");
     }
+  }
+
+  async function batchImport() {
+    try {
+      const parsed = JSON.parse(importText);
+      const accountsPayload = Array.isArray(parsed) ? parsed : parsed.accounts;
+      if (!Array.isArray(accountsPayload)) {
+        toast.warn("请输入账号数组或 { accounts: [...] }");
+        return;
+      }
+      const res = await api<{ created: number; skipped: number; errors: string[] }>(
+        "/admin/accounts/import",
+        { method: "POST", body: JSON.stringify({ accounts: accountsPayload }) }
+      );
+      toast.success(`导入完成: 新增 ${res.created}, 跳过 ${res.skipped}`);
+      if (res.errors.length) toast.warn(res.errors[0]);
+      setImportText("");
+      setShowImport(false);
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "导入失败");
+    }
+  }
+
+  async function batchDelete() {
+    if (selected.length === 0) return;
+    const ok = await confirmDialog({
+      title: "批量删除账号",
+      message: `确认删除选中的 ${selected.length} 个账号?`,
+      confirmText: "删除",
+      danger: true,
+    });
+    if (!ok) return;
+    await api("/admin/accounts/batch-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids: selected }),
+    });
+    setSelected([]);
+    load();
+    toast.success("已批量删除");
   }
 
   async function test(a: FlowAccount) {
@@ -96,11 +158,35 @@ export default function AccountsPage() {
             每个账号 = Session Token(ST)+ Project ID + Google Cookies,系统纯 HTTP 刷新 access token 并获取 reCAPTCHA
           </p>
         </div>
-        <button onClick={() => setShowForm((s) => !s)} className="btn-primary shrink-0">
-          <Plus className="h-4 w-4" />
-          新增账号
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowImport((s) => !s)} className="btn-ghost shrink-0">
+            <Upload className="h-4 w-4" />
+            批量导入
+          </button>
+          <button onClick={() => setShowForm((s) => !s)} className="btn-primary shrink-0">
+            <Plus className="h-4 w-4" />
+            新增账号
+          </button>
+        </div>
       </div>
+
+      {showImport && (
+        <div className="card mt-4 space-y-3 p-4">
+          <div>
+            <label className="label">批量导入 JSON</label>
+            <textarea
+              className="input min-h-[160px] resize-none font-mono text-xs"
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              placeholder='[{"label":"acc1","session_token":"...","project_id":"...","account_type":"pro","proxy":"...","google_cookies":"..."}]'
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowImport(false)} className="btn-ghost">取消</button>
+            <button onClick={batchImport} className="btn-primary">导入</button>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <div className="card mt-4 space-y-3.5 p-4">
@@ -144,6 +230,38 @@ export default function AccountsPage() {
           </div>
           <div className="grid grid-cols-2 gap-3.5 sm:max-w-xs">
             <div>
+              <label className="label">账号类型</label>
+              <select
+                className="input"
+                value={form.account_type}
+                onChange={(e) => setForm({ ...form, account_type: e.target.value })}
+              >
+                <option value="normal">普号</option>
+                <option value="pro">PRO</option>
+                <option value="ula">ULA</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">自动刷新(分钟)</label>
+              <input
+                type="number"
+                className="input"
+                value={form.auto_refresh_minutes}
+                onChange={(e) => setForm({ ...form, auto_refresh_minutes: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3.5 sm:max-w-xl">
+            <div>
+              <label className="label">Cookies 有效期(可选)</label>
+              <input
+                type="datetime-local"
+                className="input"
+                value={form.cookies_expires_at}
+                onChange={(e) => setForm({ ...form, cookies_expires_at: e.target.value })}
+              />
+            </div>
+            <div>
               <label className="label">权重</label>
               <input
                 type="number"
@@ -181,7 +299,7 @@ export default function AccountsPage() {
             />
           </div>
           <div className="alert-warn">
-            纯协议模式需要 Google 登录 cookies 提高 reCAPTCHA 评分。仅有 ST 可以刷新 access token,但 reCAPTCHA 可能被 Google 判低分。
+            无头 broker 会自动获取 reCAPTCHA token。建议同一账号固定代理,并填写 Google Cookies 提升评分。
           </div>
           <div className="flex justify-end gap-2">
             <button onClick={() => setShowForm(false)} className="btn-ghost">
@@ -195,12 +313,29 @@ export default function AccountsPage() {
       )}
 
       <div className="card mt-4 overflow-x-auto">
-        <table className="w-full min-w-[820px] text-[13px]">
+        {selected.length > 0 && (
+          <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-2 text-xs text-slate-400">
+            <span>已选择 {selected.length} 个账号</span>
+            <button onClick={batchDelete} className="btn-ghost btn-sm text-red-300">
+              批量删除
+            </button>
+          </div>
+        )}
+        <table className="w-full min-w-[1080px] text-[13px]">
           <thead className="border-b border-white/[0.06] text-left text-xs uppercase text-slate-500">
             <tr>
+              <th className="px-4 py-2.5">
+                <input
+                  type="checkbox"
+                  checked={accounts.length > 0 && selected.length === accounts.length}
+                  onChange={(e) => setSelected(e.target.checked ? accounts.map((a) => a.id) : [])}
+                />
+              </th>
               <th className="px-4 py-2.5">名称 / 邮箱</th>
               <th className="px-4 py-2.5">状态</th>
+              <th className="px-4 py-2.5">类型</th>
               <th className="px-4 py-2.5">凭证</th>
+              <th className="px-4 py-2.5">有效期 / 刷新</th>
               <th className="px-4 py-2.5">额度</th>
               <th className="px-4 py-2.5">权重/并发</th>
               <th className="px-4 py-2.5">成功/失败</th>
@@ -211,12 +346,28 @@ export default function AccountsPage() {
             {accounts.map((a) => (
               <tr key={a.id} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
                 <td className="px-4 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(a.id)}
+                    onChange={(e) =>
+                      setSelected((prev) =>
+                        e.target.checked ? [...prev, a.id] : prev.filter((id) => id !== a.id)
+                      )
+                    }
+                  />
+                </td>
+                <td className="px-4 py-2.5">
                   <div className="text-white">{a.label}</div>
                   <div className="text-xs text-slate-500">{a.email || a.chrome_profile}</div>
                 </td>
                 <td className="px-4 py-2.5">
                   <span className={cn("badge", STATUS_STYLE[a.status])}>
                     {a.status}
+                  </span>
+                </td>
+                <td className="px-4 py-2.5">
+                  <span className="badge bg-brand-500/15 text-brand-300">
+                    {a.account_type === "normal" ? "普号" : a.account_type.toUpperCase()}
                   </span>
                 </td>
                 <td className="px-4 py-2.5">
@@ -236,6 +387,10 @@ export default function AccountsPage() {
                   >
                     {a.has_google_cookies ? "G-Cookies" : "缺 Cookies"}
                   </span>
+                </td>
+                <td className="px-4 py-2.5 text-xs text-slate-400">
+                  <div>Cookies: {a.cookies_expires_at ? new Date(a.cookies_expires_at).toLocaleString() : "未设置"}</div>
+                  <div>下次刷新: {a.next_refresh_at ? new Date(a.next_refresh_at).toLocaleString() : "—"}</div>
                 </td>
                 <td className="px-4 py-2.5 text-slate-300">{a.remaining_credits ?? "—"}</td>
                 <td className="px-4 py-2.5 text-slate-300">
@@ -274,7 +429,7 @@ export default function AccountsPage() {
             ))}
             {accounts.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                <td colSpan={10} className="px-4 py-10 text-center text-slate-500">
                   暂无账号,点击右上角新增
                 </td>
               </tr>

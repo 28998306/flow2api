@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.enums import AccountStatus
+from app.models.enums import AccountStatus, AccountType
 from app.models.flow_account import FlowAccount
 from app.services.flow.client import FlowCredential, FlowError
 
@@ -72,7 +72,7 @@ def resolve_proxy(account: FlowAccount) -> str | None:
 
 
 @contextmanager
-def acquire_slot(db: Session):
+def acquire_slot(db: Session, required_account_types: set[AccountType] | None = None):
     """选择账号并占用全局+账号并发槽位;退出时释放。yields (FlowAccount)。"""
     r = get_sync_redis()
     now = datetime.now(timezone.utc)
@@ -91,6 +91,8 @@ def acquire_slot(db: Session):
         ).scalars().all()
         candidates = []
         for a in accounts:
+            if required_account_types and a.account_type not in required_account_types:
+                continue
             if a.status == AccountStatus.cooldown:
                 if a.cooldown_until and a.cooldown_until > now:
                     continue

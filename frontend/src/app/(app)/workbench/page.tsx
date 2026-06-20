@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/Toast";
-import type { QuotaUsage } from "@/lib/types";
+import type { ModelInfo, QuotaUsage } from "@/lib/types";
 import { useTaskProgress } from "@/lib/useTaskProgress";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +20,8 @@ export default function WorkbenchPage() {
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [ratio, setRatio] = useState("1:1");
+  const [model, setModel] = useState("nano_banana");
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [numOutputs, setNumOutputs] = useState(1);
   const [duration, setDuration] = useState(5);
   const [submitting, setSubmitting] = useState(false);
@@ -32,10 +34,12 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     loadQuota();
+    api<{ data: ModelInfo[] }>("/generate/models").then((res) => setModels(res.data)).catch(() => {});
   }, []);
 
   useEffect(() => {
     setRatio(mode === "image" ? "1:1" : "16:9");
+    setModel(mode === "image" ? "nano_banana" : "omni_flash");
   }, [mode]);
 
   useEffect(() => {
@@ -51,11 +55,12 @@ export default function WorkbenchPage() {
         mode === "image"
           ? {
               prompt,
+              model,
               negative_prompt: negative || undefined,
               aspect_ratio: ratio,
               num_outputs: numOutputs,
             }
-          : { prompt, aspect_ratio: ratio, duration, resolution: "VIDEO_RESOLUTION_1080P" };
+          : { prompt, model, aspect_ratio: ratio, duration, resolution: "VIDEO_RESOLUTION_1080P" };
       const res = await api<{ public_id: string }>(`/generate/${mode}`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -108,6 +113,19 @@ export default function WorkbenchPage() {
                 />
               </div>
             )}
+
+            <div>
+              <label className="label">模型</label>
+              <select className="input" value={model} onChange={(e) => setModel(e.target.value)}>
+                {models
+                  .filter((m) => m.type === mode)
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}{m.supports_4k ? " · ULA 4K" : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
 
             <div>
               <label className="label">画面比例</label>

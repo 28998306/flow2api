@@ -7,20 +7,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.core.db import get_db
 from app.models.enums import TaskStatus, TaskType
-from app.models.generation import GenerationTask
+from app.models.generation import GenerationTask, GenerationTaskEvent
 from app.models.user import User
 from app.schemas.generation import (
     ImageGenerateRequest,
+    ModelListOut,
     TaskCreatedOut,
+    TaskDetailOut,
+    TaskEventOut,
     TaskListOut,
     TaskOut,
     VideoGenerateRequest,
 )
+from app.services.models_catalog import list_models as list_model_catalog
 from app.services import quota
 from app.workers.celery_app import celery_app  # noqa: F401  确保 Celery 应用(redis broker)被实例化为 current_app
 from app.workers.tasks import generate_image, generate_video
 
 router = APIRouter(prefix="/generate", tags=["generation"])
+
+
+@router.get("/models", response_model=ModelListOut)
+async def models(type: TaskType | None = None):
+    return ModelListOut(data=list_model_catalog(type))
 
 
 async def _create_task(
@@ -109,7 +118,7 @@ async def list_tasks(
     )
 
 
-@router.get("/tasks/{public_id}", response_model=TaskOut)
+@router.get("/tasks/{public_id}", response_model=TaskDetailOut)
 async def get_task(
     public_id: str,
     user: User = Depends(get_current_user),
@@ -122,4 +131,13 @@ async def get_task(
     )
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return task
+    events = (
+        await db.scalars(
+            select(GenerationTaskEvent)
+            .where(GenerationTaskEvent.task_id == task.id)
+            .order_by(GenerationTaskEvent.created_at, GenerationTaskEvent.id)
+        )
+    ).all()
+    data = TaskDetailOut.model_validate(task)
+    data.events = [TaskEventOut.model_validate(e) for e in events]
+    return data

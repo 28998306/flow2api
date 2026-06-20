@@ -18,7 +18,7 @@ from celery import shared_task
 
 from app.core.config import settings
 from app.core.db_sync import SyncSessionLocal
-from app.models.enums import TaskStatus, TaskType
+from app.models.enums import AccountType, TaskStatus, TaskType
 from app.models.generation import GenerationTask
 from app.services.flow import protocol as P
 from app.services.flow import token_manager
@@ -37,8 +37,19 @@ from app.services.flow.pool import (
 from app.services.flow.recaptcha import RecaptchaError, get_recaptcha_token
 from app.services.progress import publish_progress
 from app.services.storage import store_bytes, store_remote_asset
+from app.services.task_events import log_task_event
 
 MAX_ACCOUNT_RETRIES = 3
+
+
+def _required_account_types(task: GenerationTask, task_type: TaskType) -> set[AccountType] | None:
+    model = str(task.params.get("model") or "").lower()
+    resolution = str(task.params.get("resolution") or "").lower()
+    if task_type == TaskType.image and ("4k" in model or "4k" in resolution):
+        return {AccountType.ula}
+    if model in {"banana_pro", "imagen", "veo_3_1_fast", "veo_3_1_quality"}:
+        return {AccountType.pro, AccountType.ula}
+    return None
 
 
 def _push(task: GenerationTask, status: TaskStatus, progress: int, error: str | None = None):
@@ -51,6 +62,32 @@ def _push(task: GenerationTask, status: TaskStatus, progress: int, error: str | 
             "outputs": task.outputs,
             "error": error,
         },
+    )
+
+
+def _event(
+    db,
+    task: GenerationTask,
+    stage: str,
+    message: str,
+    *,
+    level: str = "info",
+    progress: int | None = None,
+    request: dict | None = None,
+    response: dict | None = None,
+    meta: dict | None = None,
+):
+    log_task_event(
+        db,
+        task,
+        stage,
+        message,
+        level=level,
+        progress=progress,
+        account_id=task.account_id,
+        request=request,
+        response=response,
+        meta=meta,
     )
 
 
@@ -87,20 +124,34 @@ def _refresh_at(db, account, *, force: bool = False) -> str:
         raise FlowError(str(exc), retryable=(exc.kind != "auth"), kind=exc.kind) from exc
     if tok.email and not account.email:
         account.email = tok.email
+    account.bearer_expires_at = datetime.fromtimestamp(tok.expires_at, tz=timezone.utc)
+    account.next_refresh_at = datetime.fromtimestamp(
+        max(0, tok.expires_at - account.auto_refresh_minutes * 60), tz=timezone.utc
+    )
     update_bearer(db, account, tok.token, None)
     return tok.token
 
 
 def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
-    with acquire_slot(db) as account:
+    with acquire_slot(db, required_account_types=_required_account_types(task, task_type)) as account:
         task.account_id = account.id
+        _event(
+            db,
+            task,
+            "account_acquired",
+            f"已选择账号 {account.label}",
+            progress=10,
+            meta={"account_type": getattr(account.account_type, "value", str(account.account_type))},
+        )
         db.commit()
 
         action = P.ACTION_IMAGE if task_type == TaskType.image else P.ACTION_VIDEO
         proxy = resolve_proxy(account)
 
         # 1) 刷新 AT(纯 HTTP,带缓存)
+        _event(db, task, "token_refresh", "开始刷新/校验 Labs access token", progress=20)
         bearer = _refresh_at(db, account)
+        _event(db, task, "token_refresh", "Labs access token 已就绪", progress=25)
 
         def build_client(b: str) -> FlowClient:
             cred = build_credential(account)
@@ -120,6 +171,14 @@ def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
         retries = max(1, settings.FLOW_RECAPTCHA_RETRIES)
         for attempt in range(retries):
             progress_cb(30)
+            _event(
+                db,
+                task,
+                "recaptcha",
+                f"开始获取 reCAPTCHA token({attempt + 1}/{retries})",
+                progress=30,
+                meta={"action": action},
+            )
             try:
                 oracle = get_recaptcha_token(
                     profile_path(account),
@@ -130,6 +189,7 @@ def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
                     action=action,
                 )
             except RecaptchaError as exc:
+                _event(db, task, "recaptcha", str(exc), level="warn", progress=30)
                 last_exc = FlowError(str(exc), retryable=True, kind="recaptcha")
                 time.sleep(settings.FLOW_RECAPTCHA_RETRY_DELAY)
                 continue
@@ -138,13 +198,38 @@ def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
             try:
                 if task_type == TaskType.image:
                     progress_cb(60)
+                    _event(
+                        db,
+                        task,
+                        "flow_submit",
+                        "提交 Flow 出图请求",
+                        progress=60,
+                        request={"prompt": task.prompt, "params": task.params},
+                    )
                     result = client.submit_image(task.prompt, task.params, oracle.recaptcha_token)
                 else:
+                    _event(
+                        db,
+                        task,
+                        "flow_submit",
+                        "提交 Flow 出视频请求并开始轮询",
+                        progress=35,
+                        request={"prompt": task.prompt, "params": task.params},
+                    )
                     result = client.submit_video(
                         task.prompt, task.params, oracle.recaptcha_token, progress_cb
                     )
+                _event(
+                    db,
+                    task,
+                    "flow_result",
+                    "Flow 生成成功",
+                    progress=95,
+                    response={"output_count": len(result.outputs), "remaining_credits": result.remaining_credits},
+                )
                 break
             except FlowError as exc:
+                _event(db, task, "flow_error", str(exc), level="warn", progress=task.progress)
                 last_exc = exc
                 if exc.kind == "recaptcha":
                     time.sleep(settings.FLOW_RECAPTCHA_RETRY_DELAY)
@@ -165,6 +250,7 @@ def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
 
         # 3) 转存对象存储(出图为 fifeUrl 签名直链)
         progress_cb(96)
+        _event(db, task, "storage", "开始转存生成结果", progress=96)
         stored = _store_outputs(result.outputs, task.user_id, proxy=proxy)
 
         task.outputs = stored
@@ -173,6 +259,8 @@ def _attempt_once(db, task: GenerationTask, task_type: TaskType) -> bool:
         task.finished_at = datetime.now(timezone.utc)
         db.commit()
         mark_success(db, account, remaining_credits=result.remaining_credits)
+        _event(db, task, "completed", "任务完成", progress=100, response={"outputs": stored})
+        db.commit()
         _push(task, TaskStatus.succeeded, 100)
         return True
 
@@ -187,6 +275,7 @@ def _run_generation(task_id: int, task_type: TaskType) -> None:
         task.status = TaskStatus.running
         task.started_at = datetime.now(timezone.utc)
         task.progress = 5
+        _event(db, task, "started", "任务开始执行", progress=5)
         db.commit()
         _push(task, TaskStatus.running, 5)
 
@@ -209,6 +298,7 @@ def _run_generation(task_id: int, task_type: TaskType) -> None:
         task.status = TaskStatus.failed
         task.error = last_error or "生成失败"
         task.finished_at = datetime.now(timezone.utc)
+        _event(db, task, "failed", task.error, level="error", progress=task.progress)
         db.commit()
         _push(task, TaskStatus.failed, task.progress, error=task.error)
         _refund(task)

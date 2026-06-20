@@ -56,3 +56,25 @@ class GenerationTask(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="tasks")  # noqa: F821
+
+
+class GenerationTaskEvent(Base):
+    __tablename__ = "generation_task_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_tasks.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(20), default="info", nullable=False)
+    stage: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    progress: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("flow_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    request: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
