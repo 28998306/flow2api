@@ -134,7 +134,14 @@ function TaskCard({ task }: { task: Task }) {
       <div className="relative aspect-square bg-ink-900/60">
         {out ? (
           out.type === "video" ? (
-            <video src={out.url} className="h-full w-full object-cover" muted loop />
+            <video
+              src={out.url}
+              className="h-full w-full object-cover"
+              controls
+              muted
+              playsInline
+              preload="metadata"
+            />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={out.url} alt={task.prompt} className="h-full w-full object-cover" />
