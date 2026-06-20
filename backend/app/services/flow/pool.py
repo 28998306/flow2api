@@ -1,19 +1,17 @@
-"""账号池调度 + 并发闸门。
+"""账号池调度 + 并发闸门 + 账号刷新/冷却。
 
-- 全局闸门:限制对 FLOW 的总并发(settings.FLOW_GLOBAL_CONCURRENCY)。
-- 单账号闸门:限制每个账号并发(account.max_concurrency)。
-- 选号策略:加权 + 当前在用数最少 + 成功率,跳过冷却/失效账号。
-
-并发计数用 Redis 实现(跨进程/跨 worker 共享)。使用同步 redis 客户端,
-因为账号选择发生在 Celery worker(同步上下文)。
+- 全局闸门:限制对 FLOW 的总并发(Redis 计数器)。
+- 单账号闸门:限制每账号并发(账号同一 Profile 还需进程级互斥,见 worker)。
+- 选号:跳过冷却/失效账号,按 (在用率 - 权重 - 余额) 排序优先低负载高余额。
+- 冷却:配额耗尽长冷却、鉴权/限流短冷却。
 """
 
 from __future__ import annotations
 
 import json
-import time
+import os
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import redis
 from sqlalchemy import select
@@ -39,19 +37,36 @@ def get_sync_redis() -> redis.Redis:
 
 class NoAccountAvailable(FlowError):
     def __init__(self, message: str = "暂无可用账号或并发已满"):
-        super().__init__(message, retryable=True)
+        super().__init__(message, retryable=True, kind="transient")
+
+
+def profile_path(account: FlowAccount) -> str:
+    return os.path.join(settings.FLOW_PROFILES_DIR, account.chrome_profile)
+
+
+def build_credential(account: FlowAccount) -> FlowCredential:
+    headers = {}
+    if account.browser_headers:
+        try:
+            headers = json.loads(account.browser_headers)
+        except (json.JSONDecodeError, TypeError):
+            headers = {}
+    return FlowCredential(
+        account_id=account.id,
+        label=account.label,
+        bearer=account.bearer_token or "",
+        project_id=account.project_id,
+        session_id=account.session_id,
+        browser_headers=headers,
+    )
 
 
 @contextmanager
 def acquire_slot(db: Session):
-    """选择一个账号并占用全局+账号并发槽位,退出时释放。
-
-    yields (FlowCredential, FlowAccount)
-    """
+    """选择账号并占用全局+账号并发槽位;退出时释放。yields (FlowAccount)。"""
     r = get_sync_redis()
     now = datetime.now(timezone.utc)
 
-    # 全局闸门
     global_count = r.incr(GLOBAL_KEY)
     if global_count == 1:
         r.expire(GLOBAL_KEY, 3600)
@@ -64,20 +79,15 @@ def acquire_slot(db: Session):
         accounts = db.execute(
             select(FlowAccount).where(FlowAccount.status == AccountStatus.active)
         ).scalars().all()
-        # 过滤冷却中的账号
-        candidates = [
-            a for a in accounts
-            if not (a.cooldown_until and a.cooldown_until > now)
-        ]
+        candidates = [a for a in accounts if not (a.cooldown_until and a.cooldown_until > now)]
         if not candidates:
             raise NoAccountAvailable("没有可用账号")
 
-        # 选当前占用率最低的(in_use / max_concurrency),加权打散
         def score(a: FlowAccount) -> float:
             in_use = int(r.get(ACCOUNT_KEY.format(account_id=a.id)) or 0)
-            cap = max(1, a.max_concurrency)
-            load = in_use / cap
-            return load - (a.weight * 0.01)
+            load = in_use / max(1, a.max_concurrency)
+            credits_bonus = -0.001 * (a.remaining_credits or 0)
+            return load - (a.weight * 0.01) + credits_bonus
 
         candidates.sort(key=score)
 
@@ -96,40 +106,45 @@ def acquire_slot(db: Session):
 
         account.last_used_at = now
         db.commit()
-
-        extra_headers = {}
-        if account.extra_headers:
-            try:
-                extra_headers = json.loads(account.extra_headers)
-            except (json.JSONDecodeError, TypeError):
-                extra_headers = {}
-
-        cred = FlowCredential(
-            account_id=account.id,
-            label=account.label,
-            auth_token=account.auth_token,
-            cookie=account.cookie,
-            extra_headers=extra_headers,
-        )
-        yield cred, account
+        yield account
     finally:
         r.decr(GLOBAL_KEY)
         if account is not None:
             r.decr(ACCOUNT_KEY.format(account_id=account.id))
 
 
-def mark_success(db: Session, account: FlowAccount) -> None:
+def mark_success(db: Session, account: FlowAccount, remaining_credits: int | None = None) -> None:
     account.success_count += 1
     account.last_error = None
+    if remaining_credits is not None:
+        account.remaining_credits = remaining_credits
     db.commit()
 
 
-def mark_failure(db: Session, account: FlowAccount, error: str, cooldown_seconds: int = 0) -> None:
+def mark_failure(db: Session, account: FlowAccount, error: str, kind: str | None = None) -> None:
     account.fail_count += 1
     account.last_error = error[:1000]
-    if cooldown_seconds > 0:
-        from datetime import timedelta
-
-        account.cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
+    cooldown = 0
+    if kind == "quota":
+        cooldown = settings.FLOW_QUOTA_COOLDOWN
+        account.remaining_credits = 0
+    elif kind in ("auth", "recaptcha", "transient"):
+        cooldown = settings.FLOW_AUTH_COOLDOWN
+    if cooldown > 0:
+        account.cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
         account.status = AccountStatus.cooldown
     db.commit()
+
+
+def update_bearer(db: Session, account: FlowAccount, bearer: str | None, headers: dict | None) -> None:
+    if bearer and bearer.startswith("ya29."):
+        account.bearer_token = bearer
+        account.last_bearer_refresh = datetime.now(timezone.utc)
+    if headers:
+        account.browser_headers = json.dumps(headers, ensure_ascii=False)
+    db.commit()
+
+
+def account_lock_key(account_id: int) -> str:
+    """同一 Chrome Profile 进程级互斥的 Redis 锁 key。"""
+    return f"flow:profile_lock:{account_id}"

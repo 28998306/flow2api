@@ -1,0 +1,19 @@
+# 生成 Worker 镜像:基于官方 Playwright Python 镜像,内置 Chromium 与系统依赖。
+# 因为 FLOW 的 reCAPTCHA Enterprise token 必须在真实浏览器里产生。
+FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+# 确保 chromium 可用(基础镜像已含,二次确认幂等)
+RUN python -m playwright install chromium
+
+COPY . .
+
+CMD ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "image", "-l", "info"]

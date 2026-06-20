@@ -48,6 +48,18 @@ class Settings(BaseSettings):
     FLOW_PER_ACCOUNT_CONCURRENCY: int = 2
     FLOW_REQUEST_TIMEOUT: int = 120
     FLOW_VIDEO_MAX_WAIT: int = 600
+    FLOW_VIDEO_POLL_INTERVAL: int = 3
+    # 用 curl_cffi 模拟 Chrome TLS 指纹(需安装 curl_cffi)
+    FLOW_USE_CURL: bool = True
+    FLOW_IMPERSONATE: str = "chrome136"
+    # reCAPTCHA / bearer 浏览器 oracle
+    FLOW_HEADLESS: bool = True
+    # 各账号 Chrome 持久化 Profile 的根目录(容器内路径,需挂载卷)
+    FLOW_PROFILES_DIR: str = "/data/flow_profiles"
+    FLOW_TOKEN_TIMEOUT: int = 90
+    # 鉴权失败/限流账号的冷却秒数
+    FLOW_AUTH_COOLDOWN: int = 120
+    FLOW_QUOTA_COOLDOWN: int = 3600
 
     # Quota / rate limit
     DEFAULT_DAILY_IMAGE_QUOTA: int = 200

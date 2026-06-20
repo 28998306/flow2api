@@ -38,6 +38,19 @@ _EXT = {"image": "png", "video": "mp4"}
 _CONTENT_TYPE = {"image": "image/png", "video": "video/mp4"}
 
 
+def store_bytes(content: bytes, asset_type: str, user_id: int, ext: str | None = None) -> str:
+    """把生成的二进制资源存入对象存储,返回公网可访问 URL。"""
+    ext = ext or _EXT.get(asset_type, "bin")
+    key = f"{asset_type}/{user_id}/{uuid.uuid4().hex}.{ext}"
+    get_s3().put_object(
+        Bucket=settings.S3_BUCKET,
+        Key=key,
+        Body=content,
+        ContentType=_CONTENT_TYPE.get(asset_type, "application/octet-stream"),
+    )
+    return f"{settings.S3_PUBLIC_ENDPOINT}/{settings.S3_BUCKET}/{key}"
+
+
 def store_remote_asset(url: str, asset_type: str, user_id: int) -> str:
     """下载远端资源并存入对象存储,返回公网可访问 URL。"""
     ext = _EXT.get(asset_type, "bin")

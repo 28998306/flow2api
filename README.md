@@ -75,8 +75,41 @@ flow2api/
 └── docker-compose.yml
 ```
 
-## FLOW 接入说明
+## FLOW 接入说明(真实 Google Flow / Labs FX 协议)
 
-FLOW 采用「逆向网页接口 / Token 模拟请求」方式接入。适配层位于
-`backend/app/services/flow/`,把逆向得到的请求填入 `FlowClient`(已留好抽象与
-账号池调度),无需改动上层业务即可切换接入方式。
+适配层位于 `backend/app/services/flow/`,按真实协议实现:
+
+- `protocol.py`:API 基址 `aisandbox-pa.googleapis.com`、工具名 `PINHOLE`、端点、模型/比例映射、请求体构造。
+- `client.py`:出视频(`video:batchAsyncGenerateVideoText` → 轮询 `batchCheckAsyncVideoGenerationStatus` → `media/{name}` 取 base64)、出图(`image:batchGenerateImages`)、错误分类(鉴权/配额/限流/可重试),可选 curl_cffi 模拟 Chrome TLS 指纹。
+- `recaptcha.py`:Playwright 打开账号 Chrome Profile,实时抓取 ya29 Bearer + 执行 `grecaptcha.enterprise.execute` 拿到 reCAPTCHA token + 浏览器指纹头。
+- `pool.py`:账号池选号、全局/单账号并发闸门、Profile 进程级互斥锁、按错误类型冷却(配额长冷却、鉴权/限流短冷却)、Bearer 刷新。
+
+### 账号 = Google 账号 + Chrome Profile
+
+每个 FLOW 账号对应一个登录了 labs.google 的 Google 账号及其持久化 Chrome Profile
+(目录名相对 `FLOW_PROFILES_DIR`,卷 `flow_profiles` 挂载到 worker 的 `/data/flow_profiles`)。
+
+**首次启用一个账号(登录引导,需有界面的环境):**
+
+```bash
+# 在 worker 容器内,以有头浏览器打开该 Profile 登录 Google,登录后关闭即可
+docker compose exec worker_image python - <<'PY'
+import asyncio
+from playwright.async_api import async_playwright
+async def main():
+    async with async_playwright() as p:
+        ctx = await p.chromium.launch_persistent_context("/data/flow_profiles/acc1", headless=False)
+        await ctx.pages[0].goto("https://labs.google/fx/tools/flow")
+        await asyncio.sleep(180)  # 手动完成 Google 登录
+        await ctx.close()
+asyncio.run(main())
+PY
+```
+
+> 生产环境通常在一台有图形界面的机器上批量完成各 Profile 的登录,再把 `flow_profiles`
+> 卷同步到服务器;之后系统即可在 headless 模式下自动刷新 Bearer / reCAPTCHA 并出图出视频。
+
+随后在「管理后台 → 账号池」新增账号,填 `chrome_profile=acc1` 即可。系统会自动:
+抓取/刷新 Bearer、生成 reCAPTCHA、按并发与配额调度、失败冷却换号。
+
+> 出图/出视频 Worker 使用 `backend/Dockerfile.worker`(基于官方 Playwright 镜像,内置 Chromium)。

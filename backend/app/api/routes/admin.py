@@ -24,7 +24,7 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_cu
 @router.get("/accounts", response_model=list[FlowAccountOut])
 async def list_accounts(db: AsyncSession = Depends(get_db)):
     rows = (await db.scalars(select(FlowAccount).order_by(FlowAccount.id))).all()
-    return rows
+    return [FlowAccountOut.from_account(a) for a in rows]
 
 
 @router.post("/accounts", response_model=FlowAccountOut, status_code=201)
@@ -33,7 +33,7 @@ async def create_account(payload: FlowAccountCreate, db: AsyncSession = Depends(
     db.add(account)
     await db.flush()
     await db.refresh(account)
-    return account
+    return FlowAccountOut.from_account(account)
 
 
 @router.patch("/accounts/{account_id}", response_model=FlowAccountOut)
@@ -49,7 +49,7 @@ async def update_account(
         account.cooldown_until = None
     await db.flush()
     await db.refresh(account)
-    return account
+    return FlowAccountOut.from_account(account)
 
 
 @router.delete("/accounts/{account_id}", status_code=204)

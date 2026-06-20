@@ -41,6 +41,11 @@ export interface QuotaUsage {
 export interface FlowAccount {
   id: number;
   label: string;
+  email: string | null;
+  chrome_profile: string;
+  project_id: string | null;
+  paygate_tier: string | null;
+  remaining_credits: number | null;
   status: "active" | "disabled" | "cooldown" | "invalid";
   weight: number;
   max_concurrency: number;
@@ -48,6 +53,8 @@ export interface FlowAccount {
   fail_count: number;
   last_error: string | null;
   last_used_at: string | null;
+  last_bearer_refresh: string | null;
+  has_bearer: boolean;
   created_at: string;
 }
 

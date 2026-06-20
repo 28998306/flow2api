@@ -70,6 +70,7 @@ services:
   worker_image:
     build:
       context: ./backend
+      dockerfile: Dockerfile.worker
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -77,12 +78,14 @@ services:
       - redis
     volumes:
       - ./backend:/app
+      - flow_profiles:/data/flow_profiles
     command: >
-      celery -A app.workers.celery_app worker -Q image -n image@%h --concurrency=4 -l info
+      celery -A app.workers.celery_app worker -Q image -n image@%h --concurrency=2 -l info
 
   worker_video:
     build:
       context: ./backend
+      dockerfile: Dockerfile.worker
     restart: unless-stopped
     env_file: .env
     depends_on:
@@ -90,6 +93,7 @@ services:
       - redis
     volumes:
       - ./backend:/app
+      - flow_profiles:/data/flow_profiles
     command: >
       celery -A app.workers.celery_app worker -Q video -n video@%h --concurrency=2 -l info
 
@@ -107,3 +111,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  flow_profiles:
