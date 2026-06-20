@@ -56,6 +56,24 @@ export default function AdminLogsPage() {
     toast.success("已删除");
   }
 
+  async function deleteFailed() {
+    const failedCount = data?.items.filter((item) => item.status === "failed").length ?? 0;
+    const ok = await confirmDialog({
+      title: "删除失败任务",
+      message: failedCount
+        ? `确认删除所有失败任务? 当前页有 ${failedCount} 个失败任务。`
+        : "确认删除所有失败任务? 这会清理全库失败任务及其日志。",
+      confirmText: "删除失败",
+      danger: true,
+    });
+    if (!ok) return;
+    const res = await api<{ deleted: number }>("/admin/tasks/delete-failed", { method: "POST" });
+    setSelected([]);
+    setActive(null);
+    load();
+    toast.success(`已删除 ${res.deleted} 个失败任务`);
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
@@ -74,6 +92,10 @@ export default function AdminLogsPage() {
           <button onClick={load} className="btn-ghost">
             <RefreshCw className="h-4 w-4" />
             刷新
+          </button>
+          <button onClick={deleteFailed} className="btn-ghost text-red-300">
+            <Trash2 className="h-4 w-4" />
+            删除失败
           </button>
         </div>
       </div>

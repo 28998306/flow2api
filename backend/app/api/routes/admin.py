@@ -250,6 +250,16 @@ async def batch_delete_tasks(payload: BatchPublicIdsIn, db: AsyncSession = Depen
     return {"deleted": len(rows)}
 
 
+@router.post("/tasks/delete-failed")
+async def delete_failed_tasks(db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.scalars(select(GenerationTask).where(GenerationTask.status == TaskStatus.failed))
+    ).all()
+    for row in rows:
+        await db.delete(row)
+    return {"deleted": len(rows)}
+
+
 # ---------------- 下游 API Key ---------------- #
 @router.get("/api-keys", response_model=list[ApiKeyOut])
 async def list_api_keys(db: AsyncSession = Depends(get_db)):
